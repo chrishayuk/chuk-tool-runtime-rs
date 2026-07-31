@@ -106,6 +106,37 @@ impl RetryConfig {
             Duration::from_secs_f64(base)
         }
     }
+
+    /// Set the maximum number of retries. (Builder.)
+    pub fn with_max_retries(mut self, n: u32) -> Self {
+        self.max_retries = n;
+        self
+    }
+    /// Set the base backoff delay. (Builder.)
+    pub fn with_base_delay(mut self, delay: Duration) -> Self {
+        self.base_delay = delay;
+        self
+    }
+    /// Set the backoff ceiling. (Builder.)
+    pub fn with_max_delay(mut self, delay: Duration) -> Self {
+        self.max_delay = delay;
+        self
+    }
+    /// Enable or disable jitter. (Builder.)
+    pub fn with_jitter(mut self, on: bool) -> Self {
+        self.jitter = on;
+        self
+    }
+    /// Replace the retry-on substring list. (Builder.)
+    pub fn with_retry_on(mut self, patterns: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.retry_on = patterns.into_iter().map(Into::into).collect();
+        self
+    }
+    /// Replace the skip (never-retry) substring list. (Builder.)
+    pub fn with_skip_on(mut self, patterns: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.skip_on = patterns.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 /// Per-tool circuit-breaker policy.
@@ -140,6 +171,29 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
+impl CircuitBreakerConfig {
+    /// Set the failures-before-open threshold. (Builder.)
+    pub fn with_failure_threshold(mut self, n: u32) -> Self {
+        self.failure_threshold = n;
+        self
+    }
+    /// Set the probe successes needed to close. (Builder.)
+    pub fn with_success_threshold(mut self, n: u32) -> Self {
+        self.success_threshold = n;
+        self
+    }
+    /// Set how long to stay open before a probe. (Builder.)
+    pub fn with_reset_timeout(mut self, timeout: Duration) -> Self {
+        self.reset_timeout = timeout;
+        self
+    }
+    /// Set the max concurrent half-open probes. (Builder.)
+    pub fn with_half_open_max_calls(mut self, n: u32) -> Self {
+        self.half_open_max_calls = n;
+        self
+    }
+}
+
 /// Sliding-window rate-limiting policy.
 ///
 /// A **global** window (`global_limit` requests per `global_period` across all
@@ -169,6 +223,25 @@ impl Default for RateLimitConfig {
     }
 }
 
+impl RateLimitConfig {
+    /// Set the global window (`limit` requests per `period`). (Builder.)
+    pub fn with_global(mut self, limit: u32, period: Duration) -> Self {
+        self.global_limit = Some(limit);
+        self.global_period = period;
+        self
+    }
+    /// Remove the global cap (per-tool windows still apply). (Builder.)
+    pub fn without_global_limit(mut self) -> Self {
+        self.global_limit = None;
+        self
+    }
+    /// Add or replace a per-tool window. (Builder; chainable per tool.)
+    pub fn with_tool_limit(mut self, tool: impl Into<String>, limit: u32, period: Duration) -> Self {
+        self.per_tool.insert(tool.into(), (limit, period));
+        self
+    }
+}
+
 /// Result-caching policy.
 ///
 /// Caching is **opt-in per tool**: only tools in `cacheable_tools` are cached,
@@ -193,6 +266,22 @@ impl CacheConfig {
     /// Whether results for `tool` should be cached.
     pub fn is_cacheable(&self, tool: &str) -> bool {
         self.cacheable_tools.contains(tool)
+    }
+
+    /// Mark a tool cacheable. (Builder; chainable per tool.)
+    pub fn cacheable_tool(mut self, tool: impl Into<String>) -> Self {
+        self.cacheable_tools.insert(tool.into());
+        self
+    }
+    /// Set the default entry lifetime. (Builder.)
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+    /// Set a per-tool lifetime override. (Builder; chainable per tool.)
+    pub fn with_tool_ttl(mut self, tool: impl Into<String>, ttl: Duration) -> Self {
+        self.per_tool_ttl.insert(tool.into(), ttl);
+        self
     }
 }
 
@@ -224,5 +313,58 @@ mod tests {
         assert!(cfg.should_retry(Some("some totally unknown error")));
         // Skip list still wins even with an empty allow-list.
         assert!(!cfg.should_retry(Some("unauthorized")));
+    }
+
+    #[test]
+    fn retry_builders_chain() {
+        let cfg = RetryConfig::default()
+            .with_max_retries(7)
+            .with_base_delay(Duration::from_millis(200))
+            .with_max_delay(Duration::from_secs(5))
+            .with_jitter(false)
+            .with_retry_on(["boom"])
+            .with_skip_on(["nope"]);
+        assert_eq!(cfg.max_retries, 7);
+        assert_eq!(cfg.base_delay, Duration::from_millis(200));
+        assert!(!cfg.jitter);
+        assert!(cfg.should_retry(Some("boom happened")));
+        assert!(!cfg.should_retry(Some("nope not this")));
+    }
+
+    #[test]
+    fn circuit_breaker_builders_chain() {
+        let cfg = CircuitBreakerConfig::default()
+            .with_failure_threshold(2)
+            .with_success_threshold(1)
+            .with_reset_timeout(Duration::from_secs(30))
+            .with_half_open_max_calls(3);
+        assert_eq!(cfg.failure_threshold, 2);
+        assert_eq!(cfg.success_threshold, 1);
+        assert_eq!(cfg.reset_timeout, Duration::from_secs(30));
+        assert_eq!(cfg.half_open_max_calls, 3);
+    }
+
+    #[test]
+    fn rate_limit_builders_chain() {
+        let cfg = RateLimitConfig::default()
+            .with_global(10, Duration::from_secs(1))
+            .with_tool_limit("slow", 1, Duration::from_secs(60));
+        assert_eq!(cfg.global_limit, Some(10));
+        assert_eq!(cfg.per_tool.get("slow"), Some(&(1, Duration::from_secs(60))));
+
+        let none = RateLimitConfig::default().without_global_limit();
+        assert_eq!(none.global_limit, None);
+    }
+
+    #[test]
+    fn cache_builders_chain() {
+        let cfg = CacheConfig::default()
+            .cacheable_tool("a")
+            .cacheable_tool("b")
+            .with_default_ttl(Duration::from_secs(300))
+            .with_tool_ttl("a", Duration::from_secs(10));
+        assert!(cfg.is_cacheable("a") && cfg.is_cacheable("b"));
+        assert_eq!(cfg.ttl_for("a"), Some(Duration::from_secs(10))); // per-tool override
+        assert_eq!(cfg.ttl_for("b"), Some(Duration::from_secs(300))); // default
     }
 }
