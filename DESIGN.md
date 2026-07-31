@@ -93,8 +93,14 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **Rate limiting** layer (sliding window, global + per-tool, waits) — tested
 - [x] **Cache** layer (opt-in per tool, canonical-args key, TTL, success-only) — tested
 - [x] **Routing**: `ToolRegistry` (first-wins) + `Router` dispatcher with `call_on` pinning — tested
-- [ ] `chuk-mcp-rs` transport adapter (a `ToolInvoker` backed by an MCP client)
+- [x] **`chuk-mcp-rs` transport adapter** — `crates/chuk-tool-runtime-mcp`: `McpInvoker` (a `ToolInvoker` over a `chuk-mcp` client) — tested
 - [ ] `chuk-tool-runtime-python` (PyO3 bindings crate) — the ctp integration point
+
+> **Note:** the MCP adapter currently uses a **path dependency** on the local
+> `chuk-mcp-rs/crates/chuk-mcp` (that crate isn't published to crates.io yet), so
+> building `chuk-tool-runtime-mcp` needs `chuk-mcp-rs` checked out as a sibling.
+> The **core** crate has no such dependency. Switch to a version/git dep once
+> `chuk-mcp` is published.
 - [ ] Diagnostics/status surface (mirrors `MiddlewareStatus`)
 
 ## Build order rationale

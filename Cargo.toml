@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/chuk-tool-runtime"]
+members = ["crates/chuk-tool-runtime", "crates/chuk-tool-runtime-mcp"]
 
 [workspace.package]
 version = "0.1.0"

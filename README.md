@@ -17,8 +17,12 @@ See **[DESIGN.md](DESIGN.md)** for the architecture, the extraction line
 ## Layout
 
 ```
-crates/chuk-tool-runtime   # the core policy crate
+crates/chuk-tool-runtime       # the core policy crate (no MCP dependency)
+crates/chuk-tool-runtime-mcp   # MCP transport adapter (McpInvoker over a chuk-mcp client)
 ```
+
+The adapter currently path-depends on the local `chuk-mcp-rs` (unpublished); the
+core crate does not depend on it.
 
 ## Quickstart
 
