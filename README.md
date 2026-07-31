@@ -54,7 +54,8 @@ you'd rather have a `Result<Value, String>` to `?` on.
 
 Every policy layer implements one trait — `ToolInvoker` (`async fn call_tool`) —
 so you can also wrap **any** transport (implement `ToolInvoker` yourself) or
-compose layers directly. See [DESIGN.md](DESIGN.md).
+compose layers directly. See [DESIGN.md](DESIGN.md) for the architecture and
+[ROADMAP.md](ROADMAP.md) for current status and what's next.
 
 ---
 
