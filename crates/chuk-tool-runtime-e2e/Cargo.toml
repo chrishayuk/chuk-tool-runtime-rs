@@ -1,0 +1,22 @@
+[package]
+name = "chuk-tool-runtime-e2e"
+description = "End-to-end tests: the full policy stack over a real stdio MCP server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "mcp-echo-server"
+path = "src/bin/mcp-echo-server.rs"
+
+# The echo-server bin only needs chuk-mcp; the runtime crates are test-only.
+[dependencies]
+chuk-mcp = { path = "../../../chuk-mcp-rs/crates/chuk-mcp" }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+chuk-tool-runtime = { path = "../chuk-tool-runtime" }
+chuk-tool-runtime-mcp = { path = "../chuk-tool-runtime-mcp" }

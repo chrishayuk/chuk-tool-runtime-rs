@@ -94,6 +94,7 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **Cache** layer (opt-in per tool, canonical-args key, TTL, success-only) — tested
 - [x] **Routing**: `ToolRegistry` (first-wins) + `Router` dispatcher with `call_on` pinning — tested
 - [x] **`chuk-mcp-rs` transport adapter** — `crates/chuk-tool-runtime-mcp`: `McpInvoker` (a `ToolInvoker` over a `chuk-mcp` client) — tested
+- [x] **End-to-end** — `crates/chuk-tool-runtime-e2e` (`publish = false`): a stdio echo-server bin + a test that connects, routes, wraps with retry+cache, and drives the full stack
 - [ ] `chuk-tool-runtime-python` (PyO3 bindings crate) — the ctp integration point
 
 > **Note:** the MCP adapter currently uses a **path dependency** on the local
