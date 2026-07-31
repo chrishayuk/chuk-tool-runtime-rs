@@ -1,0 +1,19 @@
+[package]
+name = "chuk-tool-runtime"
+description = "Language-agnostic tool-execution policy layer (retry, circuit breaker, rate limiting, routing) over an MCP/tool invoker."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }
