@@ -97,6 +97,7 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **End-to-end** — `crates/chuk-tool-runtime-e2e` (`publish = false`): a stdio echo-server bin + a test that connects, routes, wraps with retry+cache, and drives the full stack
 - [x] **`chuk-tool-runtime-python`** (PyO3 bindings) — `connect_stdio` / `connect_http` / multi-server `connect`; typed `ToolResult`; `async with` + `close`; per-tool config; ships type stubs. Transport+policy stay Rust, only results cross to Python.
 - [x] **HTTP transport** (`connect_http` / `Router::add_mcp_http`) and **config builders** (`with_*` setters + per-tool adders)
+- [x] **Pinned calls** (`Runtime::call_on` / Python `call_on`) — direct call to a named server, bypassing the policy layers (built via `build_router`, which keeps an `Arc<Router>` handle)
 
 ## On wrapping `chuk-tool-processor` over this runtime
 

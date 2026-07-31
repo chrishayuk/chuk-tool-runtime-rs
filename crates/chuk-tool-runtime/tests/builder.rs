@@ -126,3 +126,26 @@ async fn router_as_transport_under_policy_layers() {
     assert!(out.success);
     assert_eq!(out.attempts, 2);
 }
+
+#[tokio::test]
+async fn build_router_enables_call_on() {
+    let mut router = Router::new();
+    router.add_server("s", Box::new(Transport::new(0)));
+    router.register_tools("s", &["echo".to_string()]);
+
+    let runtime = RuntimeBuilder::new().with_retry(fast_retry(2)).build_router(router);
+
+    // call_tool routes by first-wins owner.
+    assert!(runtime.call_tool("echo", Value::Null, None).await.success);
+    // call_on pins to the named server.
+    assert!(runtime.call_on("s", "echo", Value::Null, None).await.success);
+    // call_on to an unknown server is an error.
+    assert!(runtime.call_on("nope", "echo", Value::Null, None).await.is_error());
+}
+
+#[tokio::test]
+async fn call_on_without_a_router_errors() {
+    // build() (not build_router()) has no router handle.
+    let runtime = RuntimeBuilder::new().build(Transport::new(0));
+    assert!(runtime.call_on("s", "echo", Value::Null, None).await.is_error());
+}

@@ -30,3 +30,12 @@ impl ToolInvoker for Box<dyn ToolInvoker> {
         (**self).call_tool(tool, args, timeout).await
     }
 }
+
+/// Delegating impl for shared invokers — lets a stack be built over an
+/// `Arc<Router>` while a handle to the same router is kept for pinned calls.
+#[async_trait]
+impl<T: ToolInvoker + ?Sized> ToolInvoker for std::sync::Arc<T> {
+    async fn call_tool(&self, tool: &str, args: Value, timeout: Option<Duration>) -> ToolOutcome {
+        (**self).call_tool(tool, args, timeout).await
+    }
+}

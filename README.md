@@ -16,19 +16,57 @@ the same "one core, thin bindings" split as `chuk-mcp` → `chuk-mcp-rs`.
 
 ---
 
+## Getting started — Rust
+
+Wire one or more MCP servers into a `Router`, then wrap it in the policy layers:
+
+```rust
+use std::time::Duration;
+use chuk_tool_runtime::{RuntimeBuilder, RetryConfig, CacheConfig, Router};
+use chuk_tool_runtime_mcp::RouterMcpExt; // add_mcp_stdio / add_mcp_http
+use serde_json::json;
+
+// inside an async fn:
+let mut router = Router::new();
+router.add_mcp_stdio("db", "mcp-server-sqlite".into(),
+                     vec!["--db-path".into(), "app.db".into()]).await?;
+router.add_mcp_http("web", "https://mcp.example.com/mcp".into()).await?;
+
+let runtime = RuntimeBuilder::new()
+    .with_retry(RetryConfig::default().with_max_retries(3))
+    .with_cache(CacheConfig::default().cacheable_tool("query")
+                                      .with_default_ttl(Duration::from_secs(300)))
+    .build_router(router);
+
+// routed first-wins across servers
+let out = runtime.call_tool("query", json!({"sql": "select 1"}), None).await;
+if out.success {
+    println!("{:?}", out.result);
+}
+
+// reach a specific server explicitly (bypasses the policy layers)
+let pinned = runtime.call_on("web", "search", json!({"q": "rust"}), None).await;
+```
+
+`call_tool` never panics on a tool failure — it returns a `ToolOutcome`
+(`success`, `result`, `error`, `attempts`, `from_cache`); use `into_result()` if
+you'd rather have a `Result<Value, String>` to `?` on.
+
+Every policy layer implements one trait — `ToolInvoker` (`async fn call_tool`) —
+so you can also wrap **any** transport (implement `ToolInvoker` yourself) or
+compose layers directly. See [DESIGN.md](DESIGN.md).
+
+---
+
 ## Getting started — Python
 
-The Python package (`chuk_tool_runtime_rs`) gives you the full Rust runtime with
-an `async`/`await` API and full type hints.
-
-**Build it into your environment** (needs [maturin](https://www.maturin.rs) and a
-checkout of `chuk-mcp-rs` as a sibling):
+The Python package (`chuk_tool_runtime_rs`) gives you the same runtime with an
+`async`/`await` API and full type hints. Build it into your environment (needs
+[maturin](https://www.maturin.rs) and a checkout of `chuk-mcp-rs` as a sibling):
 
 ```sh
 maturin develop -m crates/chuk-tool-runtime-python/Cargo.toml
 ```
-
-**Connect to a server and call a tool:**
 
 ```python
 import asyncio
@@ -50,22 +88,21 @@ async def main():
 asyncio.run(main())
 ```
 
-`call_tool` never raises on a tool failure — it returns a typed `ToolResult`
-(`success`, `result`, `error`, `attempts`, `from_cache`). Leaving the `async with`
-(or `await runtime.close()`) shuts the server down.
+`call_tool` returns a typed `ToolResult` (never raises on a tool failure). Leaving
+the `async with` (or `await runtime.close()`) shuts the server down.
 
-**HTTP servers** and **several servers at once** (routed first-wins, so the first
-server to advertise a tool name owns it):
+**HTTP servers**, **several servers at once** (routed first-wins), and **pinned
+calls**:
 
 ```python
-# a single HTTP (streamable) server
 runtime = await rt.connect_http("https://mcp.example.com/mcp")
 
-# multiple servers, stdio and/or HTTP
 runtime = await rt.connect(servers=[
     {"name": "db",  "command": "mcp-server-sqlite", "args": ["--db-path", "app.db"]},
     {"name": "web", "url": "https://mcp.example.com/mcp"},
 ])
+await runtime.call_tool("query", {"sql": "..."})       # routed first-wins
+await runtime.call_on("web", "search", {"q": "..."})    # pin to a specific server
 ```
 
 **Tune the policies** (all optional; pass any subset):
@@ -76,41 +113,6 @@ rt.CircuitBreakerConfig(failure_threshold=5, reset_timeout=60.0)
 rt.RateLimitConfig(global_limit=100, global_period=60.0, per_tool={"slow": (5, 60.0)})
 rt.CacheConfig(cacheable_tools=["query"], default_ttl=300.0, per_tool_ttl={"query": 30.0})
 ```
-
----
-
-## Getting started — Rust
-
-Wire one or more MCP servers into a `Router`, then wrap it in the policy layers:
-
-```rust
-use std::time::Duration;
-use chuk_tool_runtime::{RuntimeBuilder, RetryConfig, CacheConfig, Router};
-use chuk_tool_runtime_mcp::RouterMcpExt; // add_mcp_stdio / add_mcp_http
-use serde_json::json;
-
-// inside an async fn:
-let mut router = Router::new();
-router.add_mcp_stdio("db", "mcp-server-sqlite".into(),
-                     vec!["--db-path".into(), "app.db".into()]).await?;
-router.add_mcp_http("web", "https://mcp.example.com/mcp".into()).await?;
-
-let runtime = RuntimeBuilder::new()
-    .with_retry(RetryConfig::default().with_max_retries(3))
-    .with_cache(CacheConfig::default().cacheable_tool("query")
-                                      .with_default_ttl(Duration::from_secs(300)))
-    .build(router);
-
-let out = runtime.call_tool("query", json!({"sql": "select 1"}), None).await;
-if out.success {
-    println!("{:?}", out.result);
-}
-```
-
-Every policy layer implements one trait — `ToolInvoker` (`async fn call_tool`) —
-so you can also wrap **any** transport (implement `ToolInvoker` yourself) or
-compose layers directly. See the [crate docs](crates/chuk-tool-runtime/src/lib.rs)
-and [DESIGN.md](DESIGN.md).
 
 ---
 

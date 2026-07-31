@@ -50,6 +50,7 @@ pub use layers::{
 pub use outcome::ToolOutcome;
 pub use routing::{Router, ToolRegistry, NO_SERVER_PREFIX};
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -57,17 +58,37 @@ use serde_json::Value;
 
 /// A built tool-execution runtime: the assembled policy stack over a transport.
 ///
-/// Returned by [`RuntimeBuilder::build`]. Call tools through it with
-/// [`Runtime::call_tool`]; dropping it shuts the underlying transport(s) down
-/// (RAII — for a stdio MCP server, closing our end signals it to exit).
+/// Returned by [`RuntimeBuilder::build`] / [`RuntimeBuilder::build_router`]. Call
+/// tools through it with [`Runtime::call_tool`]; dropping it shuts the underlying
+/// transport(s) down (RAII — for a stdio MCP server, closing our end signals it
+/// to exit).
 pub struct Runtime {
     inner: Box<dyn ToolInvoker>,
+    router: Option<Arc<Router>>,
 }
 
 impl Runtime {
-    /// Call `tool` with `args` through the full policy stack.
+    /// Call `tool` with `args` through the full policy stack. The tool is routed
+    /// to its first-wins owner.
     pub async fn call_tool(&self, tool: &str, args: Value, timeout: Option<Duration>) -> ToolOutcome {
         self.inner.call_tool(tool, args, timeout).await
+    }
+
+    /// Call `tool` on an explicitly pinned `server`, **bypassing the policy
+    /// layers** (a direct, unambiguous call to that server). Only available when
+    /// the runtime was built over a [`Router`] via [`RuntimeBuilder::build_router`];
+    /// otherwise returns a failed outcome.
+    pub async fn call_on(
+        &self,
+        server: &str,
+        tool: &str,
+        args: Value,
+        timeout: Option<Duration>,
+    ) -> ToolOutcome {
+        match &self.router {
+            Some(router) => router.call_on(server, tool, args, timeout).await,
+            None => ToolOutcome::err(tool, "call_on requires a router-based runtime"),
+        }
     }
 }
 
@@ -132,7 +153,25 @@ impl RuntimeBuilder {
     where
         I: ToolInvoker + 'static,
     {
-        let mut invoker: Box<dyn ToolInvoker> = Box::new(transport);
+        Runtime {
+            inner: self.wrap(Box::new(transport)),
+            router: None,
+        }
+    }
+
+    /// Build over a [`Router`], keeping a handle so [`Runtime::call_on`] can issue
+    /// pinned calls to a specific server.
+    pub fn build_router(self, router: Router) -> Runtime {
+        let router = Arc::new(router);
+        let base: Box<dyn ToolInvoker> = Box::new(router.clone());
+        Runtime {
+            inner: self.wrap(base),
+            router: Some(router),
+        }
+    }
+
+    /// Wrap `invoker` innermost-first with the configured layers.
+    fn wrap(self, mut invoker: Box<dyn ToolInvoker>) -> Box<dyn ToolInvoker> {
         // Retry closest to the transport...
         if let Some(cfg) = self.retry {
             invoker = Box::new(RetryLayer::new(invoker, cfg));
@@ -149,6 +188,6 @@ impl RuntimeBuilder {
         if let Some(cfg) = self.cache {
             invoker = Box::new(CacheLayer::new(invoker, cfg));
         }
-        Runtime { inner: invoker }
+        invoker
     }
 }

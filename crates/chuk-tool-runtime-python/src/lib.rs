@@ -17,8 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use chuk_tool_runtime::{
-    CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, Router, RuntimeBuilder,
-    ToolInvoker, ToolOutcome,
+    CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, Router, Runtime as CoreRuntime,
+    RuntimeBuilder, ToolOutcome,
 };
 
 /// One server entry for the multi-server [`connect`] helper.
@@ -230,12 +230,12 @@ impl PyCacheConfig {
 /// context) drops the connection, which signals the server to exit.
 #[pyclass]
 struct Runtime {
-    inner: Option<Arc<dyn ToolInvoker>>,
+    inner: Option<Arc<CoreRuntime>>,
     tool_names: Vec<String>,
 }
 
 impl Runtime {
-    fn invoker(&self) -> PyResult<Arc<dyn ToolInvoker>> {
+    fn runtime(&self) -> PyResult<Arc<CoreRuntime>> {
         self.inner
             .clone()
             .ok_or_else(|| py_err("runtime is closed"))
@@ -250,7 +250,8 @@ impl Runtime {
         self.tool_names.clone()
     }
 
-    /// Call a tool through the policy stack, returning a [`ToolResult`].
+    /// Call a tool through the policy stack (routed first-wins), returning a
+    /// [`ToolResult`].
     #[pyo3(signature = (name, arguments=None, timeout=None))]
     fn call_tool<'py>(
         &self,
@@ -259,14 +260,38 @@ impl Runtime {
         arguments: Option<Bound<'py, PyAny>>,
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.invoker()?;
+        let runtime = self.runtime()?;
         let args = match arguments {
             Some(obj) => py_to_json(&obj)?,
             None => Value::Null,
         };
         let timeout = timeout.map(Duration::from_secs_f64);
         future_into_py(py, async move {
-            let outcome = inner.call_tool(&name, args, timeout).await;
+            let outcome = runtime.call_tool(&name, args, timeout).await;
+            Ok(PyToolResult::from_outcome(outcome))
+        })
+    }
+
+    /// Call a tool on an explicitly pinned `server`, bypassing the policy layers
+    /// (a direct call to that server). Use this to reach a tool that is shadowed
+    /// by another server under first-wins routing.
+    #[pyo3(signature = (server, name, arguments=None, timeout=None))]
+    fn call_on<'py>(
+        &self,
+        py: Python<'py>,
+        server: String,
+        name: String,
+        arguments: Option<Bound<'py, PyAny>>,
+        timeout: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = self.runtime()?;
+        let args = match arguments {
+            Some(obj) => py_to_json(&obj)?,
+            None => Value::Null,
+        };
+        let timeout = timeout.map(Duration::from_secs_f64);
+        future_into_py(py, async move {
+            let outcome = runtime.call_on(&server, &name, args, timeout).await;
             Ok(PyToolResult::from_outcome(outcome))
         })
     }
@@ -332,9 +357,8 @@ fn build_runtime(router: Router, tool_names: Vec<String>, cfgs: RustConfigs) -> 
     if let Some(cfg) = cache {
         builder = builder.with_cache(cfg);
     }
-    let stack: Arc<dyn ToolInvoker> = Arc::new(builder.build(router));
     Runtime {
-        inner: Some(stack),
+        inner: Some(Arc::new(builder.build_router(router))),
         tool_names,
     }
 }
