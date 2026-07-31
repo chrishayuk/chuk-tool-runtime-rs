@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chuk_tool_runtime::{
-    CircuitBreakerConfig, RetryConfig, RuntimeBuilder, ToolInvoker, ToolOutcome, CIRCUIT_OPEN_PREFIX,
+    CircuitBreakerConfig, RateLimitConfig, RetryConfig, RuntimeBuilder, ToolInvoker, ToolOutcome,
+    CIRCUIT_OPEN_PREFIX,
 };
 use serde_json::Value;
 
@@ -83,4 +84,17 @@ async fn circuit_breaker_wraps_retry_and_opens() {
     // Third call is short-circuited by the open breaker.
     let out = runtime.call_tool("x", Value::Null, None).await;
     assert!(out.error.unwrap().contains(CIRCUIT_OPEN_PREFIX));
+}
+
+#[tokio::test]
+async fn all_layers_compose() {
+    // rate-limit → circuit-breaker → retry → transport, using default policies.
+    let runtime = RuntimeBuilder::new()
+        .with_retry(fast_retry(2))
+        .with_circuit_breaker(CircuitBreakerConfig::default())
+        .with_rate_limit(RateLimitConfig::default())
+        .build(Transport::new(1)); // one transient failure, then success
+    let out = runtime.call_tool("echo", Value::Null, None).await;
+    assert!(out.success);
+    assert_eq!(out.attempts, 2);
 }

@@ -3,11 +3,12 @@
 //! Python middleware stack: transport → retry → circuit breaker → rate limiting.
 
 mod circuit_breaker;
+mod rate_limit;
 mod retry;
 
 pub use circuit_breaker::{CircuitBreakerLayer, CircuitSnapshot, CircuitState, CIRCUIT_OPEN_PREFIX};
+pub use rate_limit::RateLimitLayer;
 pub use retry::RetryLayer;
 
 // Planned layers (see DESIGN.md):
-// mod rate_limit;  pub use rate_limit::RateLimitLayer;
-// mod cache;       pub use cache::CacheLayer;
+// mod cache;  pub use cache::CacheLayer;

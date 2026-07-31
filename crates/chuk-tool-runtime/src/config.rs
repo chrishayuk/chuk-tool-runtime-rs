@@ -6,6 +6,7 @@
 //! was case-insensitive) this core normalises both to case-insensitive, which is
 //! the intended behaviour.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Error-message substrings that, by default, *should* trigger a retry.
@@ -135,6 +136,35 @@ impl Default for CircuitBreakerConfig {
             success_threshold: 2,
             reset_timeout: Duration::from_secs(60),
             half_open_max_calls: 1,
+        }
+    }
+}
+
+/// Sliding-window rate-limiting policy.
+///
+/// A **global** window (`global_limit` requests per `global_period` across all
+/// tools) and independent **per-tool** windows. The layer *waits* until a slot
+/// frees rather than rejecting. Rate limiting is opt-in: you enable it by adding
+/// the layer via the builder.
+#[derive(Debug, Clone)]
+pub struct RateLimitConfig {
+    /// Whether the layer is active.
+    pub enabled: bool,
+    /// Max requests per `global_period` across all tools (`None` = no global cap).
+    pub global_limit: Option<u32>,
+    /// The global window length.
+    pub global_period: Duration,
+    /// Independent `tool -> (limit, period)` windows.
+    pub per_tool: HashMap<String, (u32, Duration)>,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            global_limit: Some(100),
+            global_period: Duration::from_secs(60),
+            per_tool: HashMap::new(),
         }
     }
 }

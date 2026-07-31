@@ -39,11 +39,12 @@ pub mod invoker;
 pub mod layers;
 pub mod outcome;
 
-pub use config::{CircuitBreakerConfig, RetryConfig};
+pub use config::{CircuitBreakerConfig, RateLimitConfig, RetryConfig};
 pub use error::RuntimeError;
 pub use invoker::ToolInvoker;
 pub use layers::{
-    CircuitBreakerLayer, CircuitSnapshot, CircuitState, RetryLayer, CIRCUIT_OPEN_PREFIX,
+    CircuitBreakerLayer, CircuitSnapshot, CircuitState, RateLimitLayer, RetryLayer,
+    CIRCUIT_OPEN_PREFIX,
 };
 pub use outcome::ToolOutcome;
 
@@ -57,6 +58,7 @@ pub use outcome::ToolOutcome;
 pub struct RuntimeBuilder {
     retry: Option<RetryConfig>,
     circuit_breaker: Option<CircuitBreakerConfig>,
+    rate_limit: Option<RateLimitConfig>,
 }
 
 impl RuntimeBuilder {
@@ -77,12 +79,17 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Enable the rate-limiting layer with `config` (outermost layer).
+    pub fn with_rate_limit(mut self, config: RateLimitConfig) -> Self {
+        self.rate_limit = Some(config);
+        self
+    }
+
     /// Wrap `transport` with the configured layers, returning the assembled
     /// invoker.
     ///
     /// Layers are applied innermost-first so the runtime order matches the Python
-    /// middleware stack: `circuit breaker → retry → transport` (rate limiting will
-    /// wrap outermost once added).
+    /// middleware stack: `rate limiting → circuit breaker → retry → transport`.
     pub fn build<I>(self, transport: I) -> Box<dyn ToolInvoker>
     where
         I: ToolInvoker + 'static,
@@ -92,9 +99,13 @@ impl RuntimeBuilder {
         if let Some(cfg) = self.retry {
             invoker = Box::new(RetryLayer::new(invoker, cfg));
         }
-        // ...circuit breaker above it (a fully-retried failure counts once).
+        // ...circuit breaker above it (a fully-retried failure counts once)...
         if let Some(cfg) = self.circuit_breaker {
             invoker = Box::new(CircuitBreakerLayer::new(invoker, cfg));
+        }
+        // ...rate limiting outermost (throttle before any work happens).
+        if let Some(cfg) = self.rate_limit {
+            invoker = Box::new(RateLimitLayer::new(invoker, cfg));
         }
         invoker
     }
