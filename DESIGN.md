@@ -95,7 +95,18 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **Routing**: `ToolRegistry` (first-wins) + `Router` dispatcher with `call_on` pinning — tested
 - [x] **`chuk-mcp-rs` transport adapter** — `crates/chuk-tool-runtime-mcp`: `McpInvoker` (a `ToolInvoker` over a `chuk-mcp` client) — tested
 - [x] **End-to-end** — `crates/chuk-tool-runtime-e2e` (`publish = false`): a stdio echo-server bin + a test that connects, routes, wraps with retry+cache, and drives the full stack
-- [ ] `chuk-tool-runtime-python` (PyO3 bindings crate) — the ctp integration point
+- [x] **`chuk-tool-runtime-python`** (PyO3 bindings) — `connect_stdio(...)` → `Runtime.call_tool(...)` (async); config classes; transport+policy stay Rust, only results cross to Python
+
+## On wrapping `chuk-tool-processor` over this runtime
+
+Deliberately **not** doing this in the near term. ctp's retry/breaker/rate-limit/
+cache wrappers are already *shared* across its local-tool path and its MCP path,
+so replacing only the MCP path forks the policy into two implementations, and
+replacing the local path would round-trip Rust→Python per call for tools that are
+inherently Python. ctp works today. The runtime's real consumers are a Rust
+`mcp-cli` and new Python code that wants the Rust runtime directly (the bindings).
+ctp can adopt this later, selectively (its MCP path only), if exact behavioural
+parity with `mcp-cli` becomes worth the fork — but that's a low-ROI change today.
 
 > **Note:** the MCP adapter currently uses a **path dependency** on the local
 > `chuk-mcp-rs/crates/chuk-mcp` (that crate isn't published to crates.io yet), so

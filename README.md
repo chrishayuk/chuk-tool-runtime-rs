@@ -17,12 +17,33 @@ See **[DESIGN.md](DESIGN.md)** for the architecture, the extraction line
 ## Layout
 
 ```
-crates/chuk-tool-runtime       # the core policy crate (no MCP dependency)
-crates/chuk-tool-runtime-mcp   # MCP transport adapter (McpInvoker over a chuk-mcp client)
+crates/chuk-tool-runtime          # the core policy crate (no MCP dependency)
+crates/chuk-tool-runtime-mcp      # MCP transport adapter (McpInvoker over a chuk-mcp client)
+crates/chuk-tool-runtime-python   # PyO3 bindings (module: chuk_tool_runtime_rs)
+crates/chuk-tool-runtime-e2e      # echo-server bin + full-stack test (publish = false)
 ```
 
-The adapter currently path-depends on the local `chuk-mcp-rs` (unpublished); the
-core crate does not depend on it.
+The MCP adapter, bindings, and e2e crates path-depend on the local `chuk-mcp-rs`
+(unpublished); the **core** crate does not.
+
+## From Python
+
+```python
+import asyncio, chuk_tool_runtime_rs as rt
+
+async def main():
+    runtime = await rt.connect_stdio(
+        "./target/debug/mcp-echo-server",
+        retry=rt.RetryConfig(max_retries=2),
+        cache=rt.CacheConfig(cacheable_tools=["echo"]),
+    )
+    out = await runtime.call_tool("echo", {"text": "hi"})
+    print(out["success"], out["result"])
+
+asyncio.run(main())
+```
+
+Build the extension with `maturin develop -m crates/chuk-tool-runtime-python/Cargo.toml`.
 
 ## Quickstart
 

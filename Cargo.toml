@@ -4,6 +4,14 @@ members = [
     "crates/chuk-tool-runtime",
     "crates/chuk-tool-runtime-mcp",
     "crates/chuk-tool-runtime-e2e",
+    "crates/chuk-tool-runtime-python",
+]
+# The PyO3 extension crate is built by maturin (or `-p`), not the default
+# `cargo build`/`clippy`, so plain workspace builds don't try to link libpython.
+default-members = [
+    "crates/chuk-tool-runtime",
+    "crates/chuk-tool-runtime-mcp",
+    "crates/chuk-tool-runtime-e2e",
 ]
 
 [workspace.package]

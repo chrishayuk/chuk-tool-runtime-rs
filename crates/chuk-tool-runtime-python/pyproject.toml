@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "chuk-tool-runtime-rs"
+description = "The Rust tool-execution runtime (retry, circuit breaker, rate limiting, cache, routing) for Python."
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+]
+
+[tool.maturin]
+module-name = "chuk_tool_runtime_rs"
