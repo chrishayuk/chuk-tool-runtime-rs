@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chuk_tool_runtime::{
-    CircuitBreakerConfig, RateLimitConfig, RetryConfig, RuntimeBuilder, ToolInvoker, ToolOutcome,
-    CIRCUIT_OPEN_PREFIX,
+    CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, RuntimeBuilder, ToolInvoker,
+    ToolOutcome, CIRCUIT_OPEN_PREFIX,
 };
 use serde_json::Value;
 
@@ -97,4 +97,18 @@ async fn all_layers_compose() {
     let out = runtime.call_tool("echo", Value::Null, None).await;
     assert!(out.success);
     assert_eq!(out.attempts, 2);
+}
+
+#[tokio::test]
+async fn cache_short_circuits_repeat_calls() {
+    let cache = CacheConfig {
+        cacheable_tools: ["echo".to_string()].into_iter().collect(),
+        ..Default::default()
+    };
+    let runtime = RuntimeBuilder::new().with_cache(cache).build(Transport::new(0));
+
+    let first = runtime.call_tool("echo", Value::Null, None).await;
+    assert!(first.success && !first.from_cache);
+    let second = runtime.call_tool("echo", Value::Null, None).await;
+    assert!(second.from_cache);
 }

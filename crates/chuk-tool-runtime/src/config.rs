@@ -6,7 +6,7 @@
 //! was case-insensitive) this core normalises both to case-insensitive, which is
 //! the intended behaviour.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// Error-message substrings that, by default, *should* trigger a retry.
@@ -166,6 +166,33 @@ impl Default for RateLimitConfig {
             global_period: Duration::from_secs(60),
             per_tool: HashMap::new(),
         }
+    }
+}
+
+/// Result-caching policy.
+///
+/// Caching is **opt-in per tool**: only tools in `cacheable_tools` are cached,
+/// and only successful results (errors are never cached). Entries are keyed on
+/// the tool name plus a canonical rendering of the arguments.
+#[derive(Debug, Clone, Default)]
+pub struct CacheConfig {
+    /// Tools whose successful results should be cached (empty = cache nothing).
+    pub cacheable_tools: HashSet<String>,
+    /// Default entry lifetime (`None` = never expires).
+    pub default_ttl: Option<Duration>,
+    /// Per-tool lifetime overrides.
+    pub per_tool_ttl: HashMap<String, Duration>,
+}
+
+impl CacheConfig {
+    /// The TTL to apply to `tool` (per-tool override, else the default).
+    pub fn ttl_for(&self, tool: &str) -> Option<Duration> {
+        self.per_tool_ttl.get(tool).copied().or(self.default_ttl)
+    }
+
+    /// Whether results for `tool` should be cached.
+    pub fn is_cacheable(&self, tool: &str) -> bool {
+        self.cacheable_tools.contains(tool)
     }
 }
 

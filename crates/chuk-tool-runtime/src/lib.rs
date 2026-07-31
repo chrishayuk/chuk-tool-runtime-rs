@@ -39,11 +39,11 @@ pub mod invoker;
 pub mod layers;
 pub mod outcome;
 
-pub use config::{CircuitBreakerConfig, RateLimitConfig, RetryConfig};
+pub use config::{CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig};
 pub use error::RuntimeError;
 pub use invoker::ToolInvoker;
 pub use layers::{
-    CircuitBreakerLayer, CircuitSnapshot, CircuitState, RateLimitLayer, RetryLayer,
+    CacheLayer, CircuitBreakerLayer, CircuitSnapshot, CircuitState, RateLimitLayer, RetryLayer,
     CIRCUIT_OPEN_PREFIX,
 };
 pub use outcome::ToolOutcome;
@@ -59,6 +59,7 @@ pub struct RuntimeBuilder {
     retry: Option<RetryConfig>,
     circuit_breaker: Option<CircuitBreakerConfig>,
     rate_limit: Option<RateLimitConfig>,
+    cache: Option<CacheConfig>,
 }
 
 impl RuntimeBuilder {
@@ -79,9 +80,16 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Enable the rate-limiting layer with `config` (outermost layer).
+    /// Enable the rate-limiting layer with `config`.
     pub fn with_rate_limit(mut self, config: RateLimitConfig) -> Self {
         self.rate_limit = Some(config);
+        self
+    }
+
+    /// Enable the result-cache layer with `config` (outermost — a hit
+    /// short-circuits every other layer).
+    pub fn with_cache(mut self, config: CacheConfig) -> Self {
+        self.cache = Some(config);
         self
     }
 
@@ -89,7 +97,7 @@ impl RuntimeBuilder {
     /// invoker.
     ///
     /// Layers are applied innermost-first so the runtime order matches the Python
-    /// middleware stack: `rate limiting → circuit breaker → retry → transport`.
+    /// stacks: `cache → rate limiting → circuit breaker → retry → transport`.
     pub fn build<I>(self, transport: I) -> Box<dyn ToolInvoker>
     where
         I: ToolInvoker + 'static,
@@ -103,9 +111,13 @@ impl RuntimeBuilder {
         if let Some(cfg) = self.circuit_breaker {
             invoker = Box::new(CircuitBreakerLayer::new(invoker, cfg));
         }
-        // ...rate limiting outermost (throttle before any work happens).
+        // ...rate limiting above that...
         if let Some(cfg) = self.rate_limit {
             invoker = Box::new(RateLimitLayer::new(invoker, cfg));
+        }
+        // ...cache outermost (a hit short-circuits all of the above).
+        if let Some(cfg) = self.cache {
+            invoker = Box::new(CacheLayer::new(invoker, cfg));
         }
         invoker
     }
