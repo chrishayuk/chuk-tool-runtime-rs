@@ -89,7 +89,7 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 
 - [x] `ToolInvoker` seam, `ToolOutcome`, `RuntimeBuilder`
 - [x] **Retry** layer (backoff, jitter, deadline-capped, error classification) — tested
-- [ ] **Circuit breaker** layer (per-tool 3-state machine)
+- [x] **Circuit breaker** layer (per-tool 3-state machine, diagnostics snapshot) — tested
 - [ ] **Rate limiting** layer (global + per-tool token bucket)
 - [ ] **Cache** layer (keyed on tool+args, TTL)
 - [ ] **Routing**: multi-server registry with first-wins collision policy + `server_name` pinning (ports `StreamManager._register_tools`)

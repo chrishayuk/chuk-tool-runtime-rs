@@ -106,3 +106,66 @@ impl RetryConfig {
         }
     }
 }
+
+/// Per-tool circuit-breaker policy.
+///
+/// State machine (per tool): `CLOSED → OPEN` once `failure_threshold` failures
+/// accrue; `OPEN → HALF_OPEN` after `reset_timeout`; `HALF_OPEN → CLOSED` after
+/// `success_threshold` probe successes, or back to `OPEN` on any probe failure.
+/// At most `half_open_max_calls` probes run concurrently in `HALF_OPEN`.
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerConfig {
+    /// Whether the layer is active.
+    pub enabled: bool,
+    /// Consecutive-ish failures in `CLOSED` before opening.
+    pub failure_threshold: u32,
+    /// Probe successes in `HALF_OPEN` before closing.
+    pub success_threshold: u32,
+    /// How long to stay `OPEN` before allowing a `HALF_OPEN` probe.
+    pub reset_timeout: Duration,
+    /// Max concurrent probes allowed in `HALF_OPEN`.
+    pub half_open_max_calls: u32,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            failure_threshold: 5,
+            success_threshold: 2,
+            reset_timeout: Duration::from_secs(60),
+            half_open_max_calls: 1,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_with_jitter_stays_in_band() {
+        let cfg = RetryConfig {
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            jitter: true,
+            ..RetryConfig::default()
+        };
+        // attempt 0 => base 1s, jittered into [0.5s, 1.5s).
+        for _ in 0..100 {
+            let d = cfg.backoff(0).as_secs_f64();
+            assert!((0.5..1.5).contains(&d), "jittered delay out of band: {d}");
+        }
+    }
+
+    #[test]
+    fn empty_retry_on_retries_all_non_skipped_errors() {
+        let cfg = RetryConfig {
+            retry_on: vec![],
+            ..RetryConfig::default()
+        };
+        assert!(cfg.should_retry(Some("some totally unknown error")));
+        // Skip list still wins even with an empty allow-list.
+        assert!(!cfg.should_retry(Some("unauthorized")));
+    }
+}

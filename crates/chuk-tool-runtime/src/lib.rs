@@ -39,10 +39,12 @@ pub mod invoker;
 pub mod layers;
 pub mod outcome;
 
-pub use config::RetryConfig;
+pub use config::{CircuitBreakerConfig, RetryConfig};
 pub use error::RuntimeError;
 pub use invoker::ToolInvoker;
-pub use layers::RetryLayer;
+pub use layers::{
+    CircuitBreakerLayer, CircuitSnapshot, CircuitState, RetryLayer, CIRCUIT_OPEN_PREFIX,
+};
 pub use outcome::ToolOutcome;
 
 /// Assembles a policy stack over a transport invoker.
@@ -54,6 +56,7 @@ pub use outcome::ToolOutcome;
 #[derive(Default)]
 pub struct RuntimeBuilder {
     retry: Option<RetryConfig>,
+    circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 impl RuntimeBuilder {
@@ -68,16 +71,30 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Enable the circuit-breaker layer with `config` (sits above retry).
+    pub fn with_circuit_breaker(mut self, config: CircuitBreakerConfig) -> Self {
+        self.circuit_breaker = Some(config);
+        self
+    }
+
     /// Wrap `transport` with the configured layers, returning the assembled
     /// invoker.
+    ///
+    /// Layers are applied innermost-first so the runtime order matches the Python
+    /// middleware stack: `circuit breaker → retry → transport` (rate limiting will
+    /// wrap outermost once added).
     pub fn build<I>(self, transport: I) -> Box<dyn ToolInvoker>
     where
         I: ToolInvoker + 'static,
     {
         let mut invoker: Box<dyn ToolInvoker> = Box::new(transport);
-        // Innermost-first: retry closest to the transport.
+        // Retry closest to the transport...
         if let Some(cfg) = self.retry {
             invoker = Box::new(RetryLayer::new(invoker, cfg));
+        }
+        // ...circuit breaker above it (a fully-retried failure counts once).
+        if let Some(cfg) = self.circuit_breaker {
+            invoker = Box::new(CircuitBreakerLayer::new(invoker, cfg));
         }
         invoker
     }
