@@ -18,6 +18,7 @@ use std::process::Output;
 
 mod broker;
 mod bubblewrap;
+mod limits;
 mod local;
 mod runner;
 mod seatbelt;
@@ -25,6 +26,10 @@ pub mod wire;
 
 pub use broker::{Broker, BrokerConfig, BrokerSession};
 pub use bubblewrap::BubblewrapBackend;
+pub use limits::{
+    IsolationLimits, DEFAULT_CPU_SECONDS, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_PROCESSES,
+    DEFAULT_MAX_TOOL_CALLS, DEFAULT_MEMORY_BYTES, DEFAULT_WALL_TIMEOUT,
+};
 pub use local::LocalBackend;
 pub use runner::{IsolatedResult, IsolatedRunner};
 pub use seatbelt::{SeatbeltBackend, DEFAULT_DENY_READ_PATHS};

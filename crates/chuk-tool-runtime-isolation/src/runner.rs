@@ -9,12 +9,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chuk_tool_runtime::ToolInvoker;
 use serde_json::{json, Value};
 
 use crate::broker::{Broker, BrokerConfig};
+use crate::limits::{truncate_utf8, IsolationLimits};
 use crate::{LaunchCtx, SandboxBackend};
 
 /// The guest bootstrap, embedded and written into each run's work dir.
@@ -44,6 +44,7 @@ pub struct IsolatedRunner {
     allowed_tools: Option<HashSet<String>>,
     python: String,
     allow_no_isolation: bool,
+    limits: IsolationLimits,
 }
 
 impl IsolatedRunner {
@@ -56,7 +57,14 @@ impl IsolatedRunner {
             allowed_tools: None,
             python: python_exe(),
             allow_no_isolation: false,
+            limits: IsolationLimits::default(),
         }
+    }
+
+    /// Set the resource ceilings for the run (default: [`IsolationLimits::default`]).
+    pub fn limits(mut self, limits: IsolationLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Pin brokered tools to `namespace` (default: `"default"`).
@@ -83,8 +91,8 @@ impl IsolatedRunner {
         self.backend.is_available()
     }
 
-    /// Execute `code` in the sandbox, bounded by `timeout`.
-    pub async fn run(&self, code: &str, timeout: Duration) -> std::io::Result<IsolatedResult> {
+    /// Execute `code` in the sandbox, bounded by the configured [`IsolationLimits`].
+    pub async fn run(&self, code: &str) -> std::io::Result<IsolatedResult> {
         if !self.backend.provides_isolation() && !self.allow_no_isolation {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -120,6 +128,7 @@ impl IsolatedRunner {
             "token": token,
             "namespace": self.namespace,
             "tools": tools,
+            "limits": self.limits.guest_json(),
         });
         std::fs::write(workdir.path().join("job.json"), serde_json::to_vec(&job)?)?;
 
@@ -130,6 +139,7 @@ impl IsolatedRunner {
                 token,
                 namespace: self.namespace.clone(),
                 allowed_tools: self.allowed_tools.clone(),
+                max_tool_calls: self.limits.max_tool_calls,
             },
         )
         .await?;
@@ -160,12 +170,13 @@ impl IsolatedRunner {
             Ok::<_, std::io::Error>((session, output))
         };
 
-        let result = match tokio::time::timeout(timeout, run).await {
+        let cap = self.limits.max_output_bytes;
+        let result = match tokio::time::timeout(self.limits.wall_timeout, run).await {
             Ok(Ok((session, output))) => IsolatedResult {
                 value: session.result,
                 tool_calls: session.tool_calls,
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stdout: truncate_utf8(String::from_utf8_lossy(&output.stdout).into_owned(), cap),
+                stderr: truncate_utf8(String::from_utf8_lossy(&output.stderr).into_owned(), cap),
                 timed_out: false,
                 exit_ok: output.status.success(),
             },
@@ -203,6 +214,7 @@ mod tests {
     use crate::{LocalBackend, SeatbeltBackend};
     use async_trait::async_trait;
     use chuk_tool_runtime::ToolOutcome;
+    use std::time::Duration;
 
     struct HostTools;
     #[async_trait]
@@ -225,7 +237,7 @@ mod tests {
         // LocalBackend provides no isolation; without allow_no_isolation the run
         // is rejected before anything is spawned.
         let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools));
-        let err = runner.run("return 1", Duration::from_secs(5)).await.unwrap_err();
+        let err = runner.run("return 1").await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
@@ -235,9 +247,10 @@ mod tests {
             return;
         }
         let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
-            .allow_no_isolation(true);
+            .allow_no_isolation(true)
+            .limits(IsolationLimits::default().with_wall_timeout(Duration::from_millis(500)));
         let result = runner
-            .run("import asyncio\nawait asyncio.sleep(30)\nreturn 1", Duration::from_millis(500))
+            .run("import asyncio\nawait asyncio.sleep(30)\nreturn 1")
             .await
             .unwrap();
         assert!(result.timed_out);
@@ -252,11 +265,46 @@ mod tests {
         let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
             .allow_no_isolation(true)
             .allowed_tools(["echo"]);
-        let result = runner.run(ECHO_CODE, Duration::from_secs(30)).await.unwrap();
+        let result = runner.run(ECHO_CODE).await.unwrap();
         assert!(!result.timed_out, "stderr: {}", result.stderr);
         assert!(result.exit_ok, "stderr: {}", result.stderr);
         assert_eq!(result.value, Some(json!("hi")));
         assert_eq!(result.tool_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn caps_captured_output_to_the_limit() {
+        if !have_python() {
+            return;
+        }
+        // The guest prints far more than the cap; the runner keeps only `cap` bytes.
+        let cap = 32;
+        let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
+            .allow_no_isolation(true)
+            .limits(IsolationLimits { max_output_bytes: cap, ..IsolationLimits::default() });
+        let result = runner.run("print('x' * 10000)\nreturn 1").await.unwrap();
+        assert!(result.exit_ok, "stderr: {}", result.stderr);
+        assert!(result.stdout.len() <= cap, "stdout was {} bytes", result.stdout.len());
+    }
+
+    #[tokio::test]
+    async fn a_cpu_bound_guest_is_killed_by_the_cpu_limit() {
+        if !have_python() {
+            return;
+        }
+        // A tight busy loop burns CPU without tripping the (generous) wall clock;
+        // the guest's RLIMIT_CPU takes it down instead. It sends no result.
+        let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
+            .allow_no_isolation(true)
+            .limits(
+                IsolationLimits::default()
+                    .with_cpu_seconds(1)
+                    .with_wall_timeout(Duration::from_secs(30)),
+            );
+        let result = runner.run("while True:\n    pass").await.unwrap();
+        assert!(!result.timed_out, "should die by CPU limit, not wall clock");
+        assert!(!result.exit_ok);
+        assert_eq!(result.value, None);
     }
 
     #[cfg_attr(not(target_os = "macos"), ignore)]
@@ -271,7 +319,7 @@ mod tests {
             .allowed_tools(["echo"]);
 
         // Untrusted code calls the brokered host tool and returns a value.
-        let result = runner.run(ECHO_CODE, Duration::from_secs(30)).await.unwrap();
+        let result = runner.run(ECHO_CODE).await.unwrap();
 
         assert!(!result.timed_out, "stderr: {}", result.stderr);
         assert!(result.exit_ok, "guest failed; stderr: {}", result.stderr);

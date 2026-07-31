@@ -28,6 +28,9 @@ pub struct BrokerConfig {
     /// Tools the guest may call. `None` allows all; entries may be bare (`"name"`)
     /// or namespace-qualified (`"ns.name"`).
     pub allowed_tools: Option<HashSet<String>>,
+    /// Maximum successful tool calls the guest may make before the broker refuses
+    /// further ones.
+    pub max_tool_calls: usize,
 }
 
 impl BrokerConfig {
@@ -118,6 +121,11 @@ impl Broker {
                     // No privileged work once the run has produced its result.
                     if session.result.is_some() {
                         wire::send(&mut writer, &err(&id, "run already completed")).await?;
+                        continue;
+                    }
+                    // Enforce the host-set tool-call ceiling.
+                    if session.tool_calls >= self.config.max_tool_calls {
+                        wire::send(&mut writer, &err(&id, "tool call limit exceeded")).await?;
                         continue;
                     }
                     let params = msg.get(wire::KEY_PARAMS).cloned().unwrap_or_else(|| json!({}));
@@ -212,10 +220,15 @@ mod tests {
     }
 
     fn cfg(allowed: Option<&[&str]>) -> BrokerConfig {
+        cfg_with_cap(allowed, usize::MAX)
+    }
+
+    fn cfg_with_cap(allowed: Option<&[&str]>, max_tool_calls: usize) -> BrokerConfig {
         BrokerConfig {
             token: "secret".into(),
             namespace: "default".into(),
             allowed_tools: allowed.map(|a| a.iter().map(|s| s.to_string()).collect()),
+            max_tool_calls,
         }
     }
 
@@ -284,6 +297,27 @@ mod tests {
         assert!(wire::recv(&mut c).await.unwrap()["error"].as_str().unwrap().contains("namespace"));
         drop(c);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enforces_the_tool_call_ceiling() {
+        let (broker, path, _dir) = bind(cfg_with_cap(None, 1)).await;
+        let server = tokio::spawn(async move { broker.serve_one().await.unwrap() });
+        let mut c = UnixStream::connect(&path).await.unwrap();
+        wire::send(&mut c, &json!({"id": 1, "method": "hello", "token": "secret"})).await.unwrap();
+        wire::recv(&mut c).await.unwrap();
+
+        // First call is within budget.
+        wire::send(&mut c, &json!({"id": 2, "method": "call_tool", "params": {"name": "echo"}})).await.unwrap();
+        assert_eq!(wire::recv(&mut c).await.unwrap()["ok"], json!(true));
+
+        // Second call exceeds the ceiling and is refused.
+        wire::send(&mut c, &json!({"id": 3, "method": "call_tool", "params": {"name": "echo"}})).await.unwrap();
+        let reply = wire::recv(&mut c).await.unwrap();
+        assert_eq!(reply["ok"], json!(false));
+        assert!(reply["error"].as_str().unwrap().contains("limit"));
+        drop(c);
+        assert_eq!(server.await.unwrap().tool_calls, 1);
     }
 
     #[tokio::test]

@@ -40,9 +40,13 @@ is pure logic + I/O and needs no Python) so it can be shared.
   tested: the `Broker` + `IsolatedRunner` + guest, and backends **Seatbelt**
   (macOS, end-to-end verified), **Local** (no-op dev/CI, gated by
   `allow_no_isolation`), and **Bubblewrap** (Linux; argv unit-tested — can't run
-  on macOS CI). Remaining parity: the **Docker** backend (deferred until a
-  Docker-daemon CI can cover its pull/run/remove lifecycle to the 90% bar) and
-  **resource limits** (CPU/memory/pids/output caps).
+  on macOS CI), plus **resource limits** — an `IsolationLimits` (wall-clock,
+  CPU-seconds, memory, pids, tool-call count, output-byte caps) enforced across
+  the stack: the runner holds the wall clock and truncates captured output, the
+  broker caps tool calls, and the guest applies CPU/memory/pid `setrlimit`s
+  (best-effort defence in depth). Remaining parity: the **Docker** backend
+  (deferred until a Docker-daemon CI can cover its pull/run/remove lifecycle to
+  the 90% bar).
 
 For a **client** (mcp-cli) the case is especially clean: its tools are *remote*
 MCP tools, so there is never a local Python callable to run — it wants exactly

@@ -15,6 +15,38 @@ import sys
 _LEN = struct.Struct(">I")
 
 
+def _apply_limits(limits):
+    """Apply POSIX resource ceilings (best-effort defence in depth).
+
+    Mirrors chuk-tool-processor: cap CPU-seconds, address space, and process
+    count via setrlimit. Each is clamped to the inherited hard limit and any
+    failure is ignored — the OS sandbox remains the primary control.
+    """
+    try:
+        import resource
+    except ImportError:
+        return
+
+    def _set(what, value):
+        try:
+            _, hard = resource.getrlimit(what)
+            capped = value if hard == resource.RLIM_INFINITY else min(value, hard)
+            resource.setrlimit(what, (capped, hard))
+        except (ValueError, OSError):
+            pass
+
+    cpu = limits.get("cpu_seconds")
+    if cpu:
+        # +1 so the soft SIGXCPU fires just after the intended budget.
+        _set(resource.RLIMIT_CPU, int(cpu) + 1)
+    memory = limits.get("memory_bytes")
+    if memory and hasattr(resource, "RLIMIT_AS"):
+        _set(resource.RLIMIT_AS, int(memory))
+    processes = limits.get("max_processes")
+    if processes and hasattr(resource, "RLIMIT_NPROC"):
+        _set(resource.RLIMIT_NPROC, int(processes))
+
+
 async def _send(writer, obj):
     body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
     writer.write(_LEN.pack(len(body)) + body)
@@ -57,6 +89,9 @@ async def main():
 
     for name in job.get("tools", []):
         guest_globals[name] = make_proxy(name)
+
+    # Constrain the untrusted code (not the bootstrap/connection above).
+    _apply_limits(job.get("limits", {}))
 
     # Wrap the code so it may use `await` and `return`.
     body = "".join("    " + line + "\n" for line in job["code"].splitlines()) or "    pass\n"
