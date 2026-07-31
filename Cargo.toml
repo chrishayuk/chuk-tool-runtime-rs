@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/chuk-tool-runtime",
     "crates/chuk-tool-runtime-mcp",
+    "crates/chuk-tool-runtime-isolation",
     "crates/chuk-tool-runtime-e2e",
     "crates/chuk-tool-runtime-python",
 ]
@@ -11,6 +12,7 @@ members = [
 default-members = [
     "crates/chuk-tool-runtime",
     "crates/chuk-tool-runtime-mcp",
+    "crates/chuk-tool-runtime-isolation",
     "crates/chuk-tool-runtime-e2e",
 ]
 

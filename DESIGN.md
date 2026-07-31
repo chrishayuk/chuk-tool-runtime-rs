@@ -33,10 +33,12 @@ is pure logic + I/O and needs no Python) so it can be shared.
   tools, `ValidatedTool`/Pydantic, `InProcessStrategy` executing Python
   functions, LangChain interop. The Python package becomes *bindings over this
   core* plus these Python-only surfaces.
-- **Not in scope** — isolation of untrusted **Python** code (Seatbelt/Docker/
-  Bubblewrap guests). That is a server/agent concern tied to the Python guest and
-  stays in `chuk-tool-processor`. (Sandboxing *native* code could be added later
-  if a Rust consumer needs it, but it is not a port of the Python isolation.)
+- **Isolation / sandboxing** (Phase B, in progress) — `crates/chuk-tool-runtime-isolation`.
+  OS-level sandbox *orchestration* is a strong Rust fit: the host launches a guest
+  under Seatbelt / Docker / Linux namespaces and brokers tool calls back over a
+  unix socket. The guest that runs untrusted **Python** code is still a Python
+  bootstrap that Rust spawns sandboxed. Goal: full ctp isolation parity
+  (`IsolatedCodeRunner`) in Rust.
 
 For a **client** (mcp-cli) the case is especially clean: its tools are *remote*
 MCP tools, so there is never a local Python callable to run — it wants exactly
