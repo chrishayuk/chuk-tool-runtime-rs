@@ -51,9 +51,10 @@ impl SeatbeltBackend {
 
     /// The generated SBPL profile for a run.
     fn profile(&self, ctx: &LaunchCtx) -> String {
+        let socket_dir = ctx.endpoint.parent().unwrap_or_else(|| Path::new("/tmp"));
         let write_roots = [
             real(&ctx.workdir),
-            real(&ctx.socket_dir),
+            real(socket_dir),
             real(Path::new("/private/tmp")),
             real(Path::new("/tmp")),
         ];
@@ -122,7 +123,7 @@ mod tests {
     fn ctx_in(dir: &Path) -> LaunchCtx {
         LaunchCtx {
             workdir: dir.to_path_buf(),
-            socket_dir: dir.to_path_buf(),
+            endpoint: dir.join("broker.sock"),
         }
     }
 

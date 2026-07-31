@@ -43,6 +43,7 @@ pub struct IsolatedRunner {
     namespace: String,
     allowed_tools: Option<HashSet<String>>,
     python: String,
+    allow_no_isolation: bool,
 }
 
 impl IsolatedRunner {
@@ -54,6 +55,7 @@ impl IsolatedRunner {
             namespace: "default".to_string(),
             allowed_tools: None,
             python: python_exe(),
+            allow_no_isolation: false,
         }
     }
 
@@ -69,6 +71,13 @@ impl IsolatedRunner {
         self
     }
 
+    /// Permit a non-isolating backend (e.g. [`crate::LocalBackend`]). Required to
+    /// use one — a non-isolating backend must not run untrusted code by accident.
+    pub fn allow_no_isolation(mut self, allow: bool) -> Self {
+        self.allow_no_isolation = allow;
+        self
+    }
+
     /// Whether the backend can run here.
     pub fn is_available(&self) -> bool {
         self.backend.is_available()
@@ -76,15 +85,30 @@ impl IsolatedRunner {
 
     /// Execute `code` in the sandbox, bounded by `timeout`.
     pub async fn run(&self, code: &str, timeout: Duration) -> std::io::Result<IsolatedResult> {
+        if !self.backend.provides_isolation() && !self.allow_no_isolation {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "backend '{}' provides no isolation; set allow_no_isolation(true) to use it",
+                    self.backend.name()
+                ),
+            ));
+        }
+
         let workdir = tempfile::tempdir()?;
         // Short socket path (unix sun_path is length-limited); /tmp is in the
-        // Seatbelt write roots.
+        // backends' write roots.
         let socket = PathBuf::from("/tmp").join(format!("ctr-{:016x}.sock", rand::random::<u64>()));
         let token = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
 
-        let guest_path = workdir.path().join("guest.py");
-        std::fs::write(&guest_path, GUEST_PY)?;
+        let ctx = LaunchCtx {
+            workdir: workdir.path().to_path_buf(),
+            endpoint: socket.clone(),
+        };
 
+        // Files are written on the host; the guest reads them at its own paths
+        // (identity for same-fs backends, mounted for containers).
+        std::fs::write(workdir.path().join("guest.py"), GUEST_PY)?;
         let tools: Vec<String> = self
             .allowed_tools
             .as_ref()
@@ -92,13 +116,12 @@ impl IsolatedRunner {
             .unwrap_or_default();
         let job = json!({
             "code": code,
-            "endpoint": socket.to_string_lossy(),
+            "endpoint": self.backend.endpoint_guest(&ctx).to_string_lossy(),
             "token": token,
             "namespace": self.namespace,
             "tools": tools,
         });
-        let job_path = workdir.path().join("job.json");
-        std::fs::write(&job_path, serde_json::to_vec(&job)?)?;
+        std::fs::write(workdir.path().join("job.json"), serde_json::to_vec(&job)?)?;
 
         let broker = Broker::bind(
             &socket,
@@ -111,14 +134,12 @@ impl IsolatedRunner {
         )
         .await?;
 
-        let ctx = LaunchCtx {
-            workdir: workdir.path().to_path_buf(),
-            socket_dir: PathBuf::from("/tmp"),
-        };
+        let guest_dir = self.backend.workdir_guest(&ctx);
+        let python = self.backend.python_exe().unwrap_or_else(|| self.python.clone());
         let mut argv = self.backend.wrapper_argv(&ctx);
-        argv.push(self.python.clone());
-        argv.push(guest_path.to_string_lossy().into_owned());
-        argv.push(job_path.to_string_lossy().into_owned());
+        argv.push(python);
+        argv.push(guest_dir.join("guest.py").to_string_lossy().into_owned());
+        argv.push(guest_dir.join("job.json").to_string_lossy().into_owned());
 
         let (program, rest) = argv.split_first().expect("wrapper argv is non-empty");
         let mut cmd = tokio::process::Command::new(program);
@@ -179,7 +200,7 @@ fn python_exe() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SeatbeltBackend;
+    use crate::{LocalBackend, SeatbeltBackend};
     use async_trait::async_trait;
     use chuk_tool_runtime::ToolOutcome;
 
@@ -197,6 +218,47 @@ mod tests {
             .any(|p| Path::new(p).exists())
     }
 
+    const ECHO_CODE: &str = "r = await echo(text=\"hi\")\nreturn r[\"echoed\"][\"text\"]";
+
+    #[tokio::test]
+    async fn refuses_non_isolating_backend_without_opt_in() {
+        // LocalBackend provides no isolation; without allow_no_isolation the run
+        // is rejected before anything is spawned.
+        let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools));
+        let err = runner.run("return 1", Duration::from_secs(5)).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn times_out_a_hanging_guest() {
+        if !have_python() {
+            return;
+        }
+        let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
+            .allow_no_isolation(true);
+        let result = runner
+            .run("import asyncio\nawait asyncio.sleep(30)\nreturn 1", Duration::from_millis(500))
+            .await
+            .unwrap();
+        assert!(result.timed_out);
+    }
+
+    #[tokio::test]
+    async fn local_backend_runs_the_full_broker_path() {
+        if !have_python() {
+            return;
+        }
+        // No OS sandbox — exercises the runner + broker + guest cross-platform.
+        let runner = IsolatedRunner::new(Box::new(LocalBackend), Arc::new(HostTools))
+            .allow_no_isolation(true)
+            .allowed_tools(["echo"]);
+        let result = runner.run(ECHO_CODE, Duration::from_secs(30)).await.unwrap();
+        assert!(!result.timed_out, "stderr: {}", result.stderr);
+        assert!(result.exit_ok, "stderr: {}", result.stderr);
+        assert_eq!(result.value, Some(json!("hi")));
+        assert_eq!(result.tool_calls, 1);
+    }
+
     #[cfg_attr(not(target_os = "macos"), ignore)]
     #[tokio::test]
     async fn end_to_end_sandboxed_code_calls_a_host_tool() {
@@ -209,9 +271,7 @@ mod tests {
             .allowed_tools(["echo"]);
 
         // Untrusted code calls the brokered host tool and returns a value.
-        let code = r#"r = await echo(text="hi")
-return r["echoed"]["text"]"#;
-        let result = runner.run(code, Duration::from_secs(30)).await.unwrap();
+        let result = runner.run(ECHO_CODE, Duration::from_secs(30)).await.unwrap();
 
         assert!(!result.timed_out, "stderr: {}", result.stderr);
         assert!(result.exit_ok, "guest failed; stderr: {}", result.stderr);

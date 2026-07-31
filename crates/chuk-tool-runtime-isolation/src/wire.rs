@@ -64,3 +64,36 @@ pub async fn recv<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Value> {
     }
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn round_trips_a_message() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        send(&mut a, &json!({"method": "hello", "id": 1})).await.unwrap();
+        assert_eq!(recv(&mut b).await.unwrap(), json!({"method": "hello", "id": 1}));
+    }
+
+    #[tokio::test]
+    async fn recv_rejects_an_oversized_declared_frame() {
+        let (mut a, mut b) = tokio::io::duplex(16);
+        a.write_all(&(MAX_FRAME_BYTES as u32 + 1).to_be_bytes()).await.unwrap();
+        a.flush().await.unwrap();
+        let err = recv(&mut b).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn recv_rejects_a_non_object_message() {
+        let (mut a, mut b) = tokio::io::duplex(64);
+        let body = b"[1,2,3]";
+        a.write_all(&(body.len() as u32).to_be_bytes()).await.unwrap();
+        a.write_all(body).await.unwrap();
+        a.flush().await.unwrap();
+        assert!(recv(&mut b).await.unwrap_err().to_string().contains("JSON object"));
+    }
+}

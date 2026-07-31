@@ -17,24 +17,31 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 mod broker;
+mod bubblewrap;
+mod local;
 mod runner;
 mod seatbelt;
 pub mod wire;
 
 pub use broker::{Broker, BrokerConfig, BrokerSession};
+pub use bubblewrap::BubblewrapBackend;
+pub use local::LocalBackend;
 pub use runner::{IsolatedResult, IsolatedRunner};
 pub use seatbelt::{SeatbeltBackend, DEFAULT_DENY_READ_PATHS};
 
 /// Per-run paths handed to a backend when it builds its launch wrapper.
 #[derive(Debug, Clone)]
 pub struct LaunchCtx {
-    /// The guest's writable staging directory.
+    /// The guest's writable staging directory (holds `guest.py` + `job.json`).
     pub workdir: PathBuf,
-    /// Directory holding the broker's unix socket (the only network the guest gets).
-    pub socket_dir: PathBuf,
+    /// The broker's unix socket path — the only network the guest gets.
+    pub endpoint: PathBuf,
 }
 
-/// How to launch a command under OS isolation.
+/// How to launch a guest command under OS isolation.
+///
+/// The identity mapping (guest paths == host paths, host python) is the default;
+/// container backends override the `*_guest` methods and [`python_exe`].
 pub trait SandboxBackend: Send + Sync {
     /// Short identifier, e.g. `"seatbelt"`.
     fn name(&self) -> &str;
@@ -48,6 +55,22 @@ pub trait SandboxBackend: Send + Sync {
     /// The wrapper argv prepended to the guest command (e.g.
     /// `["sandbox-exec", "-p", <profile>]`). Empty for a no-op backend.
     fn wrapper_argv(&self, ctx: &LaunchCtx) -> Vec<String>;
+
+    /// Where the guest sees the work dir (default: identity — same as host).
+    fn workdir_guest(&self, ctx: &LaunchCtx) -> PathBuf {
+        ctx.workdir.clone()
+    }
+
+    /// Where the guest reaches the broker socket (default: identity).
+    fn endpoint_guest(&self, ctx: &LaunchCtx) -> PathBuf {
+        ctx.endpoint.clone()
+    }
+
+    /// Python executable for the guest (`None` = the runner's host python; a
+    /// container backend returns its in-image interpreter).
+    fn python_exe(&self) -> Option<String> {
+        None
+    }
 
     /// Extra environment variables to set for the guest.
     fn extra_env(&self) -> Vec<(String, String)> {
@@ -95,4 +118,33 @@ pub(crate) fn real(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_home_handles_tilde_and_absolute() {
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(expand_home("~/a/b"), format!("{home}/a/b"));
+        }
+        assert_eq!(expand_home("/abs/path"), "/abs/path");
+        assert_eq!(expand_home("relative"), "relative");
+    }
+
+    #[test]
+    fn real_falls_back_when_path_missing() {
+        assert_eq!(real(Path::new("/no/such/path/xyz")), "/no/such/path/xyz");
+    }
+
+    #[tokio::test]
+    async fn run_sandboxed_rejects_an_empty_command() {
+        let ctx = LaunchCtx {
+            workdir: std::env::temp_dir(),
+            endpoint: std::env::temp_dir().join("s.sock"),
+        };
+        let err = run_sandboxed(&crate::LocalBackend, &ctx, &[]).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }
