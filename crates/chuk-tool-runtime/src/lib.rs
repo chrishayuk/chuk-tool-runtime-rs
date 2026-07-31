@@ -38,6 +38,7 @@ pub mod error;
 pub mod invoker;
 pub mod layers;
 pub mod outcome;
+pub mod routing;
 
 pub use config::{CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig};
 pub use error::RuntimeError;
@@ -47,6 +48,7 @@ pub use layers::{
     CIRCUIT_OPEN_PREFIX,
 };
 pub use outcome::ToolOutcome;
+pub use routing::{Router, ToolRegistry, NO_SERVER_PREFIX};
 
 /// Assembles a policy stack over a transport invoker.
 ///

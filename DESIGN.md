@@ -92,7 +92,7 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **Circuit breaker** layer (per-tool 3-state machine, diagnostics snapshot) — tested
 - [x] **Rate limiting** layer (sliding window, global + per-tool, waits) — tested
 - [x] **Cache** layer (opt-in per tool, canonical-args key, TTL, success-only) — tested
-- [ ] **Routing**: multi-server registry with first-wins collision policy + `server_name` pinning (ports `StreamManager._register_tools`)
+- [x] **Routing**: `ToolRegistry` (first-wins) + `Router` dispatcher with `call_on` pinning — tested
 - [ ] `chuk-mcp-rs` transport adapter (a `ToolInvoker` backed by an MCP client)
 - [ ] `chuk-tool-runtime-python` (PyO3 bindings crate) — the ctp integration point
 - [ ] Diagnostics/status surface (mirrors `MiddlewareStatus`)

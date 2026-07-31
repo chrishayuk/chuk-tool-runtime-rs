@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chuk_tool_runtime::{
-    CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, RuntimeBuilder, ToolInvoker,
-    ToolOutcome, CIRCUIT_OPEN_PREFIX,
+    CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, Router, RuntimeBuilder,
+    ToolInvoker, ToolOutcome, CIRCUIT_OPEN_PREFIX,
 };
 use serde_json::Value;
 
@@ -111,4 +111,18 @@ async fn cache_short_circuits_repeat_calls() {
     assert!(first.success && !first.from_cache);
     let second = runtime.call_tool("echo", Value::Null, None).await;
     assert!(second.from_cache);
+}
+
+#[tokio::test]
+async fn router_as_transport_under_policy_layers() {
+    // A Router is the innermost invoker; policy layers wrap it. Here retry papers
+    // over the routed server's transient failure.
+    let mut router = Router::new();
+    router.add_server("s", Box::new(Transport::new(1))); // one failure, then success
+    router.register_tools("s", &["echo".to_string()]);
+
+    let runtime = RuntimeBuilder::new().with_retry(fast_retry(3)).build(router);
+    let out = runtime.call_tool("echo", Value::Null, None).await;
+    assert!(out.success);
+    assert_eq!(out.attempts, 2);
 }
