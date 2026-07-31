@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chuk_mcp::protocol::messages::tools::{Tool, ToolResult};
-use chuk_mcp::{McpClient, McpError};
-use chuk_tool_runtime::{ToolInvoker, ToolOutcome};
+use chuk_mcp::{Connect, McpClient, McpError};
+use chuk_tool_runtime::{Router, ToolInvoker, ToolOutcome};
 use serde_json::{json, Value};
 
 /// The slice of a `chuk-mcp` client the adapter needs. Implemented for
@@ -85,6 +85,52 @@ impl<C: McpToolClient> ToolInvoker for McpInvoker<C> {
             Ok(tool_result) => to_outcome(tool, tool_result),
             Err(err) => ToolOutcome::err(tool, err.to_string()),
         }
+    }
+}
+
+/// Connect to a stdio MCP server (era-detecting) and wrap it as an [`McpInvoker`].
+///
+/// ```no_run
+/// # async fn run() -> Result<(), chuk_mcp::McpError> {
+/// let invoker = chuk_tool_runtime_mcp::connect_stdio("mcp-server", ["--flag"]).await?;
+/// let names = invoker.tool_names().await?;
+/// # Ok(()) }
+/// ```
+pub async fn connect_stdio(
+    command: impl Into<String>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<McpInvoker<McpClient>, McpError> {
+    let client = Connect::to_command(command, args).connect().await?;
+    Ok(McpInvoker::new(client))
+}
+
+/// Extension for wiring MCP servers into a [`Router`] in one call.
+#[async_trait]
+pub trait RouterMcpExt {
+    /// Connect to a stdio MCP server, discover its tools, and register it under
+    /// `server` — the [`Router`] equivalent of the manual connect/discover/add
+    /// dance.
+    async fn add_mcp_stdio(
+        &mut self,
+        server: &str,
+        command: String,
+        args: Vec<String>,
+    ) -> Result<(), McpError>;
+}
+
+#[async_trait]
+impl RouterMcpExt for Router {
+    async fn add_mcp_stdio(
+        &mut self,
+        server: &str,
+        command: String,
+        args: Vec<String>,
+    ) -> Result<(), McpError> {
+        let invoker = connect_stdio(command, args).await?;
+        let names = invoker.tool_names().await?;
+        self.register_tools(server, &names);
+        self.add_server(server, Box::new(invoker));
+        Ok(())
     }
 }
 

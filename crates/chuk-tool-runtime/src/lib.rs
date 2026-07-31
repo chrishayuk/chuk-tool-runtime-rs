@@ -50,6 +50,34 @@ pub use layers::{
 pub use outcome::ToolOutcome;
 pub use routing::{Router, ToolRegistry, NO_SERVER_PREFIX};
 
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde_json::Value;
+
+/// A built tool-execution runtime: the assembled policy stack over a transport.
+///
+/// Returned by [`RuntimeBuilder::build`]. Call tools through it with
+/// [`Runtime::call_tool`]; dropping it shuts the underlying transport(s) down
+/// (RAII — for a stdio MCP server, closing our end signals it to exit).
+pub struct Runtime {
+    inner: Box<dyn ToolInvoker>,
+}
+
+impl Runtime {
+    /// Call `tool` with `args` through the full policy stack.
+    pub async fn call_tool(&self, tool: &str, args: Value, timeout: Option<Duration>) -> ToolOutcome {
+        self.inner.call_tool(tool, args, timeout).await
+    }
+}
+
+#[async_trait]
+impl ToolInvoker for Runtime {
+    async fn call_tool(&self, tool: &str, args: Value, timeout: Option<Duration>) -> ToolOutcome {
+        self.inner.call_tool(tool, args, timeout).await
+    }
+}
+
 /// Assembles a policy stack over a transport invoker.
 ///
 /// Layers are applied innermost-first so the runtime order matches the Python
@@ -100,7 +128,7 @@ impl RuntimeBuilder {
     ///
     /// Layers are applied innermost-first so the runtime order matches the Python
     /// stacks: `cache → rate limiting → circuit breaker → retry → transport`.
-    pub fn build<I>(self, transport: I) -> Box<dyn ToolInvoker>
+    pub fn build<I>(self, transport: I) -> Runtime
     where
         I: ToolInvoker + 'static,
     {
@@ -121,6 +149,6 @@ impl RuntimeBuilder {
         if let Some(cfg) = self.cache {
             invoker = Box::new(CacheLayer::new(invoker, cfg));
         }
-        invoker
+        Runtime { inner: invoker }
     }
 }

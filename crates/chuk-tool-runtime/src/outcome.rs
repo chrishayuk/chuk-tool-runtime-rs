@@ -53,4 +53,14 @@ impl ToolOutcome {
     pub fn is_error(&self) -> bool {
         !self.success
     }
+
+    /// Convert into a `Result` for `?`-style handling: the payload on success
+    /// (`null` if there was none), or the error message on failure.
+    pub fn into_result(self) -> Result<Value, String> {
+        if self.success {
+            Ok(self.result.unwrap_or(Value::Null))
+        } else {
+            Err(self.error.unwrap_or_default())
+        }
+    }
 }

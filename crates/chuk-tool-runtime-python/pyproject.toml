@@ -14,4 +14,8 @@ classifiers = [
 ]
 
 [tool.maturin]
-module-name = "chuk_tool_runtime_rs"
+# Mixed layout: the compiled module is chuk_tool_runtime_rs._native, re-exported
+# by the thin python/chuk_tool_runtime_rs/__init__.py, which also ships the type
+# stubs (__init__.pyi) and the py.typed marker.
+module-name = "chuk_tool_runtime_rs._native"
+python-source = "python"

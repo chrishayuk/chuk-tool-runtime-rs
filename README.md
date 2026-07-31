@@ -32,16 +32,20 @@ The MCP adapter, bindings, and e2e crates path-depend on the local `chuk-mcp-rs`
 import asyncio, chuk_tool_runtime_rs as rt
 
 async def main():
-    runtime = await rt.connect_stdio(
+    async with await rt.connect_stdio(
         "./target/debug/mcp-echo-server",
         retry=rt.RetryConfig(max_retries=2),
         cache=rt.CacheConfig(cacheable_tools=["echo"]),
-    )
-    out = await runtime.call_tool("echo", {"text": "hi"})
-    print(out["success"], out["result"])
+    ) as runtime:
+        print(runtime.tools)                       # -> ['echo']
+        out = await runtime.call_tool("echo", {"text": "hi"})
+        print(out.success, out.result, out.from_cache)   # typed ToolResult
 
 asyncio.run(main())
 ```
+
+Ships type stubs (`py.typed`), so editors get full autocomplete. Leaving the
+`async with` (or calling `await runtime.close()`) shuts the server down.
 
 Build the extension with `maturin develop -m crates/chuk-tool-runtime-python/Cargo.toml`.
 

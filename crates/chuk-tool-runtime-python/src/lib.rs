@@ -1,25 +1,23 @@
 //! PyO3 bindings for `chuk-tool-runtime`.
 //!
-//! Exposes the Rust tool-execution runtime to Python: connect to a stdio MCP
-//! server, wrap it in the policy layers (retry, circuit breaker, rate limiting,
-//! cache) over first-wins routing, and `await runtime.call_tool(...)`. The
-//! transport and all policy stay in Rust; only the result crosses to Python.
+//! Exposes the Rust tool-execution runtime to Python as `chuk_tool_runtime_rs`:
+//! connect to a stdio MCP server, wrap it in the policy layers (retry, circuit
+//! breaker, rate limiting, cache) over first-wins routing, and
+//! `await runtime.call_tool(...)`. The transport and all policy stay in Rust;
+//! only the typed result crosses to Python.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
-use chuk_mcp::Connect;
 use chuk_tool_runtime::{
     CacheConfig, CircuitBreakerConfig, RateLimitConfig, RetryConfig, Router, RuntimeBuilder,
     ToolInvoker, ToolOutcome,
 };
-use chuk_tool_runtime_mcp::McpInvoker;
 
 fn py_err(msg: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(msg.into())
@@ -33,19 +31,65 @@ fn json_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     Ok(pythonize(py, value)?.unbind())
 }
 
-fn outcome_to_py(py: Python<'_>, outcome: &ToolOutcome) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new(py);
-    dict.set_item("tool", &outcome.tool)?;
-    dict.set_item("success", outcome.success)?;
-    let result = match &outcome.result {
-        Some(value) => json_to_py(py, value)?,
-        None => py.None(),
-    };
-    dict.set_item("result", result)?;
-    dict.set_item("error", outcome.error.clone())?;
-    dict.set_item("attempts", outcome.attempts)?;
-    dict.set_item("from_cache", outcome.from_cache)?;
-    Ok(dict.into_any().unbind())
+// --------------------------------------------------------------------------- #
+//  Result
+// --------------------------------------------------------------------------- #
+
+/// The typed result of a tool call.
+#[pyclass(name = "ToolResult")]
+struct PyToolResult {
+    /// The tool that was called.
+    #[pyo3(get)]
+    tool: String,
+    /// Whether the call ultimately succeeded.
+    #[pyo3(get)]
+    success: bool,
+    result: Option<Value>,
+    /// Error message when `success` is `False`.
+    #[pyo3(get)]
+    error: Option<String>,
+    /// Number of invocation attempts made.
+    #[pyo3(get)]
+    attempts: u32,
+    /// Whether the result was served from the cache.
+    #[pyo3(get)]
+    from_cache: bool,
+}
+
+impl PyToolResult {
+    fn from_outcome(outcome: ToolOutcome) -> Self {
+        Self {
+            tool: outcome.tool,
+            success: outcome.success,
+            result: outcome.result,
+            error: outcome.error,
+            attempts: outcome.attempts,
+            from_cache: outcome.from_cache,
+        }
+    }
+}
+
+#[pymethods]
+impl PyToolResult {
+    /// The tool's result payload (or `None`).
+    #[getter]
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.result {
+            Some(value) => json_to_py(py, value),
+            None => Ok(py.None()),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        let pybool = |b: bool| if b { "True" } else { "False" };
+        format!(
+            "ToolResult(tool={:?}, success={}, from_cache={}, attempts={})",
+            self.tool,
+            pybool(self.success),
+            pybool(self.from_cache),
+            self.attempts
+        )
+    }
 }
 
 // --------------------------------------------------------------------------- #
@@ -154,16 +198,33 @@ impl PyCacheConfig {
 //  Runtime
 // --------------------------------------------------------------------------- #
 
-/// A built tool-execution runtime over one or more MCP servers.
+/// A built tool-execution runtime over an MCP server.
+///
+/// Supports `async with` for deterministic shutdown; `close()` (or leaving the
+/// context) drops the connection, which signals the server to exit.
 #[pyclass]
 struct Runtime {
-    inner: Arc<dyn ToolInvoker>,
+    inner: Option<Arc<dyn ToolInvoker>>,
+    tool_names: Vec<String>,
+}
+
+impl Runtime {
+    fn invoker(&self) -> PyResult<Arc<dyn ToolInvoker>> {
+        self.inner
+            .clone()
+            .ok_or_else(|| py_err("runtime is closed"))
+    }
 }
 
 #[pymethods]
 impl Runtime {
-    /// Call a tool through the policy stack. Returns a dict with `success`,
-    /// `result`, `error`, `attempts`, and `from_cache`.
+    /// The names of the tools available through this runtime.
+    #[getter]
+    fn tools(&self) -> Vec<String> {
+        self.tool_names.clone()
+    }
+
+    /// Call a tool through the policy stack, returning a [`ToolResult`].
     #[pyo3(signature = (name, arguments=None, timeout=None))]
     fn call_tool<'py>(
         &self,
@@ -172,7 +233,7 @@ impl Runtime {
         arguments: Option<Bound<'py, PyAny>>,
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.invoker()?;
         let args = match arguments {
             Some(obj) => py_to_json(&obj)?,
             None => Value::Null,
@@ -180,8 +241,30 @@ impl Runtime {
         let timeout = timeout.map(Duration::from_secs_f64);
         future_into_py(py, async move {
             let outcome = inner.call_tool(&name, args, timeout).await;
-            Python::attach(|py| outcome_to_py(py, &outcome))
+            Ok(PyToolResult::from_outcome(outcome))
         })
+    }
+
+    /// Shut the runtime down, dropping the connection to the server.
+    fn close<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.inner = None;
+        future_into_py(py, async move { Ok(()) })
+    }
+
+    fn __aenter__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move { Ok(slf) })
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &mut self,
+        py: Python<'py>,
+        _exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.inner = None;
+        future_into_py(py, async move { Ok(false) }) // don't suppress exceptions
     }
 }
 
@@ -205,11 +288,9 @@ fn connect_stdio<'py>(
     let cache = cache.map(|c| c.inner);
 
     future_into_py(py, async move {
-        let client = Connect::to_command(command, args)
-            .connect()
+        let invoker = chuk_tool_runtime_mcp::connect_stdio(command, args)
             .await
             .map_err(|e| py_err(format!("connect failed: {e}")))?;
-        let invoker = McpInvoker::new(client);
         let names = invoker
             .tool_names()
             .await
@@ -233,15 +314,17 @@ fn connect_stdio<'py>(
             builder = builder.with_cache(cfg);
         }
 
-        let stack: Box<dyn ToolInvoker> = builder.build(router);
+        let stack: Arc<dyn ToolInvoker> = Arc::new(builder.build(router));
         Ok(Runtime {
-            inner: Arc::from(stack),
+            inner: Some(stack),
+            tool_names: names,
         })
     })
 }
 
 #[pymodule]
-fn chuk_tool_runtime_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyToolResult>()?;
     m.add_class::<PyRetryConfig>()?;
     m.add_class::<PyCircuitBreakerConfig>()?;
     m.add_class::<PyRateLimitConfig>()?;
