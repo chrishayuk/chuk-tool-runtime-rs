@@ -8,6 +8,8 @@ from ._native import (
     RetryConfig,
     Runtime,
     ToolResult,
+    connect,
+    connect_http,
     connect_stdio,
 )
 
@@ -18,5 +20,7 @@ __all__ = [
     "RetryConfig",
     "Runtime",
     "ToolResult",
+    "connect",
+    "connect_http",
     "connect_stdio",
 ]

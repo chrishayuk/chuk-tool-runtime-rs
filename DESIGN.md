@@ -95,7 +95,8 @@ skip list case-insensitively; this core normalises **both** to case-insensitive.
 - [x] **Routing**: `ToolRegistry` (first-wins) + `Router` dispatcher with `call_on` pinning — tested
 - [x] **`chuk-mcp-rs` transport adapter** — `crates/chuk-tool-runtime-mcp`: `McpInvoker` (a `ToolInvoker` over a `chuk-mcp` client) — tested
 - [x] **End-to-end** — `crates/chuk-tool-runtime-e2e` (`publish = false`): a stdio echo-server bin + a test that connects, routes, wraps with retry+cache, and drives the full stack
-- [x] **`chuk-tool-runtime-python`** (PyO3 bindings) — `connect_stdio(...)` → `Runtime.call_tool(...)` (async); config classes; transport+policy stay Rust, only results cross to Python
+- [x] **`chuk-tool-runtime-python`** (PyO3 bindings) — `connect_stdio` / `connect_http` / multi-server `connect`; typed `ToolResult`; `async with` + `close`; per-tool config; ships type stubs. Transport+policy stay Rust, only results cross to Python.
+- [x] **HTTP transport** (`connect_http` / `Router::add_mcp_http`) and **config builders** (`with_*` setters + per-tool adders)
 
 ## On wrapping `chuk-tool-processor` over this runtime
 

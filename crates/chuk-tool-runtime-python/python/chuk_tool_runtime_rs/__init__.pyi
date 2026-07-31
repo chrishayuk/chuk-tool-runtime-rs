@@ -1,6 +1,6 @@
 """Type stubs for chuk_tool_runtime_rs (the Rust tool runtime)."""
 
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 class ToolResult:
     """The typed result of a tool call."""
@@ -32,11 +32,19 @@ class CircuitBreakerConfig:
     ) -> None: ...
 
 class RateLimitConfig:
-    def __init__(self, global_limit: int = 100, global_period: float = 60.0) -> None: ...
+    def __init__(
+        self,
+        global_limit: int = 100,
+        global_period: float = 60.0,
+        per_tool: Optional[Mapping[str, Tuple[int, float]]] = None,
+    ) -> None: ...
 
 class CacheConfig:
     def __init__(
-        self, cacheable_tools: Sequence[str], default_ttl: Optional[float] = None
+        self,
+        cacheable_tools: Sequence[str],
+        default_ttl: Optional[float] = None,
+        per_tool_ttl: Optional[Mapping[str, float]] = None,
     ) -> None: ...
 
 class Runtime:
@@ -57,6 +65,20 @@ class Runtime:
 async def connect_stdio(
     command: str,
     args: Optional[Sequence[str]] = None,
+    retry: Optional[RetryConfig] = None,
+    circuit_breaker: Optional[CircuitBreakerConfig] = None,
+    rate_limit: Optional[RateLimitConfig] = None,
+    cache: Optional[CacheConfig] = None,
+) -> Runtime: ...
+async def connect_http(
+    url: str,
+    retry: Optional[RetryConfig] = None,
+    circuit_breaker: Optional[CircuitBreakerConfig] = None,
+    rate_limit: Optional[RateLimitConfig] = None,
+    cache: Optional[CacheConfig] = None,
+) -> Runtime: ...
+async def connect(
+    servers: Sequence[Mapping[str, Any]],
     retry: Optional[RetryConfig] = None,
     circuit_breaker: Optional[CircuitBreakerConfig] = None,
     rate_limit: Optional[RateLimitConfig] = None,

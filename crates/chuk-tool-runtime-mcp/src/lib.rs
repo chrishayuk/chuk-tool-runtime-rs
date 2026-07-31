@@ -104,6 +104,12 @@ pub async fn connect_stdio(
     Ok(McpInvoker::new(client))
 }
 
+/// Connect to an HTTP (streamable) MCP server and wrap it as an [`McpInvoker`].
+pub async fn connect_http(url: impl Into<String>) -> Result<McpInvoker<McpClient>, McpError> {
+    let client = Connect::to_url(url).connect().await?;
+    Ok(McpInvoker::new(client))
+}
+
 /// Extension for wiring MCP servers into a [`Router`] in one call.
 #[async_trait]
 pub trait RouterMcpExt {
@@ -116,6 +122,9 @@ pub trait RouterMcpExt {
         command: String,
         args: Vec<String>,
     ) -> Result<(), McpError>;
+
+    /// Connect to an HTTP MCP server, discover its tools, and register it.
+    async fn add_mcp_http(&mut self, server: &str, url: String) -> Result<(), McpError>;
 }
 
 #[async_trait]
@@ -127,11 +136,24 @@ impl RouterMcpExt for Router {
         args: Vec<String>,
     ) -> Result<(), McpError> {
         let invoker = connect_stdio(command, args).await?;
-        let names = invoker.tool_names().await?;
-        self.register_tools(server, &names);
-        self.add_server(server, Box::new(invoker));
-        Ok(())
+        register(self, server, invoker).await
     }
+
+    async fn add_mcp_http(&mut self, server: &str, url: String) -> Result<(), McpError> {
+        let invoker = connect_http(url).await?;
+        register(self, server, invoker).await
+    }
+}
+
+async fn register(
+    router: &mut Router,
+    server: &str,
+    invoker: McpInvoker<McpClient>,
+) -> Result<(), McpError> {
+    let names = invoker.tool_names().await?;
+    router.register_tools(server, &names);
+    router.add_server(server, Box::new(invoker));
+    Ok(())
 }
 
 /// Map an MCP `ToolResult` onto a runtime [`ToolOutcome`].
