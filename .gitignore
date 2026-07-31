@@ -2,3 +2,7 @@
 **/*.rs.bk
 Cargo.lock.orig
 .DS_Store
+# Python build artifacts (maturin drops the compiled module into python-source on develop)
+__pycache__/
+*.pyc
+*.so
