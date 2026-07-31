@@ -16,8 +16,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+mod broker;
 mod seatbelt;
+pub mod wire;
 
+pub use broker::{Broker, BrokerConfig, BrokerSession};
 pub use seatbelt::{SeatbeltBackend, DEFAULT_DENY_READ_PATHS};
 
 /// Per-run paths handed to a backend when it builds its launch wrapper.
